@@ -85,7 +85,7 @@ export default function AdminApp() {
     setBusy(true); setLoginErr("");
     const { error } = await sb.auth.signInWithPassword({ email: String(f.get("email")), password: String(f.get("password")) });
     setBusy(false);
-    if (error) setLoginErr("Email ou mot de passe incorrect.");
+    if (error) setLoginErr(`Connexion impossible : ${error.message}`);
   }
 
   async function forgot(e: React.FormEvent<HTMLFormElement>) {
