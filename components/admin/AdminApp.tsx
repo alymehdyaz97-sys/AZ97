@@ -7,6 +7,7 @@ import ProductsTab from "./ProductsTab";
 import CollectionsTab from "./CollectionsTab";
 import SettingsTab from "./SettingsTab";
 import { errText } from "./helpers";
+import PasswordField from "./PasswordField";
 
 export type Notify = (text: string, error?: boolean) => void;
 type Tab = "products" | "collections" | "settings";
@@ -23,6 +24,10 @@ export default function AdminApp() {
   const [msg, setMsg] = useState<{ text: string; error: boolean } | null>(null);
   const [loginErr, setLoginErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [mode, setMode] = useState<"login" | "forgot">("login");
+  const [recovering, setRecovering] = useState(false);
+  const [showPw, setShowPw] = useState(false);
+  const [info, setInfo] = useState("");
 
   const notify: Notify = useCallback((text, error = false) => {
     setMsg({ text, error });
@@ -62,8 +67,12 @@ export default function AdminApp() {
     const client = supabaseBrowser();
     setSb(client);
     if (!client) { setReady(true); return; }
+    if (typeof window !== "undefined" && /type=recovery/.test(window.location.hash)) setRecovering(true);
     checkUser(client);
-    const { data: sub } = client.auth.onAuthStateChange(() => { checkUser(client); });
+    const { data: sub } = client.auth.onAuthStateChange((event) => {
+      if (event === "PASSWORD_RECOVERY") setRecovering(true);
+      window.setTimeout(() => { checkUser(client); }, 0);
+    });
     return () => sub.subscription.unsubscribe();
   }, [checkUser]);
 
@@ -77,6 +86,35 @@ export default function AdminApp() {
     const { error } = await sb.auth.signInWithPassword({ email: String(f.get("email")), password: String(f.get("password")) });
     setBusy(false);
     if (error) setLoginErr("Email ou mot de passe incorrect.");
+  }
+
+  async function forgot(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!sb) return;
+    const f = new FormData(e.currentTarget);
+    setBusy(true); setLoginErr(""); setInfo("");
+    const { error } = await sb.auth.resetPasswordForEmail(String(f.get("email")).trim(), { redirectTo: `${window.location.origin}/admin` });
+    setBusy(false);
+    if (error) setLoginErr(errText(error));
+    else setInfo("Si ce compte existe, un email vient d'être envoyé. Ouvre-le sur ton téléphone et touche le lien. Pense à regarder les courriers indésirables.");
+  }
+
+  async function savePassword(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!sb) return;
+    const f = new FormData(e.currentTarget);
+    const pw = String(f.get("newpw"));
+    setBusy(true); setLoginErr(""); setInfo("");
+    const { error } = await sb.auth.updateUser({ password: pw });
+    setBusy(false);
+    if (error) { setLoginErr(errText(error)); return; }
+    if (recovering) {
+      setRecovering(false);
+      window.history.replaceState(null, "", "/admin");
+    }
+    setShowPw(false);
+    notify("Mot de passe modifié.");
+    (e.target as HTMLFormElement).reset();
   }
 
   async function logout() {
@@ -96,18 +134,46 @@ export default function AdminApp() {
     );
   }
 
+  if (recovering && email) {
+    return (
+      <div className="adm">
+        <div className="login">
+          <h1>Nouveau mot de passe</h1>
+          <p className="hint">Choisis un nouveau mot de passe (8 caractères minimum) pour {email}.</p>
+          <form onSubmit={savePassword}>
+            <PasswordField id="np" name="newpw" label="Nouveau mot de passe" autoComplete="new-password" minLength={8} />
+            {loginErr ? <div className="msg err">{loginErr}</div> : null}
+            <button className="btn" type="submit" disabled={busy}>{busy ? "Enregistrement..." : "Enregistrer"}</button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
   if (!email) {
     return (
       <div className="adm">
         <div className="login">
           <h1>AZ#97</h1>
           <p className="hint">Espace administrateur</p>
-          <form onSubmit={login}>
-            <label htmlFor="em">Email<input id="em" name="email" type="email" autoComplete="username" required /></label>
-            <label htmlFor="pw">Mot de passe<input id="pw" name="password" type="password" autoComplete="current-password" required /></label>
-            {loginErr ? <div className="msg err">{loginErr}</div> : null}
-            <button className="btn" type="submit" disabled={busy}>{busy ? "Connexion..." : "Se connecter"}</button>
-          </form>
+          {mode === "login" ? (
+            <form onSubmit={login}>
+              <label htmlFor="em">Email<input id="em" name="email" type="email" autoComplete="username" inputMode="email" autoCapitalize="none" required /></label>
+              <PasswordField id="pw" name="password" label="Mot de passe" autoComplete="current-password" />
+              {loginErr ? <div className="msg err">{loginErr}</div> : null}
+              <button className="btn" type="submit" disabled={busy}>{busy ? "Connexion..." : "Se connecter"}</button>
+              <button className="linkbtn" type="button" onClick={() => { setMode("forgot"); setLoginErr(""); setInfo(""); }}>Mot de passe oublié ?</button>
+            </form>
+          ) : (
+            <form onSubmit={forgot}>
+              <p className="hint" style={{ margin: 0 }}>Entre ton email : on t&apos;envoie un lien pour choisir un nouveau mot de passe.</p>
+              <label htmlFor="fe">Email<input id="fe" name="email" type="email" autoComplete="username" inputMode="email" autoCapitalize="none" required /></label>
+              {loginErr ? <div className="msg err">{loginErr}</div> : null}
+              {info ? <div className="msg">{info}</div> : null}
+              <button className="btn" type="submit" disabled={busy}>{busy ? "Envoi..." : "Envoyer le lien"}</button>
+              <button className="linkbtn" type="button" onClick={() => { setMode("login"); setLoginErr(""); setInfo(""); }}>Retour à la connexion</button>
+            </form>
+          )}
         </div>
       </div>
     );
@@ -134,9 +200,21 @@ export default function AdminApp() {
         </div>
         <div className="row">
           <a className="btn ghost small" href="/" target="_blank" rel="noopener noreferrer">Voir le site</a>
+          <button className="btn ghost small" type="button" onClick={() => { setShowPw((v) => !v); setLoginErr(""); }}>Mot de passe</button>
           <button className="btn small" type="button" onClick={logout}>Déconnexion</button>
         </div>
       </div>
+      {showPw ? (
+        <form className="card" onSubmit={savePassword}>
+          <h2>Changer mon mot de passe</h2>
+          <PasswordField id="np2" name="newpw" label="Nouveau mot de passe (8 caractères minimum)" autoComplete="new-password" minLength={8} />
+          {loginErr ? <div className="msg err" style={{ marginTop: 10 }}>{loginErr}</div> : null}
+          <div className="row" style={{ marginTop: 12 }}>
+            <button className="btn small" type="submit" disabled={busy}>{busy ? "Enregistrement..." : "Enregistrer"}</button>
+            <button className="btn ghost small" type="button" onClick={() => setShowPw(false)}>Annuler</button>
+          </div>
+        </form>
+      ) : null}
       {msg ? <div className={`msg${msg.error ? " err" : ""}`} role="status">{msg.text}</div> : null}
       <div className="tabs" role="tablist">
         <button className="tab" role="tab" aria-selected={tab === "products"} onClick={() => setTab("products")}>Produits et prix</button>
